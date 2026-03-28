@@ -1,0 +1,32 @@
+{
+    "configurations": [
+        {
+            "name": "Example: Create Job",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "example.create_job",
+            "justMyCode": false,
+            "env": {
+                "DISTRIBUTE_DB_HOST": "<TODO: Fill me in!>",
+                "DISTRIBUTE_DB_NAME": "<TODO: Fill me in!>",
+                "DISTRIBUTE_DB_USER": "<TODO: Fill me in!>",
+                "DISTRIBUTE_DB_PASSWORD": "<TODO: Fill me in!>",
+                "DISTRIBUTE_DB_PORT": "<TODO: Fill me in!>",
+            },
+        },
+        {
+            "name": "Example: Run Worker",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "example.worker",
+            "justMyCode": false,
+            "env": {
+                "DISTRIBUTE_DB_HOST": "<TODO: Fill me in!>",
+                "DISTRIBUTE_DB_NAME": "<TODO: Fill me in!>",
+                "DISTRIBUTE_DB_USER": "<TODO: Fill me in!>",
+                "DISTRIBUTE_DB_PASSWORD": "<TODO: Fill me in!>",
+                "DISTRIBUTE_DB_PORT": "<TODO: Fill me in!>",
+            },
+        },
+    ]
+}

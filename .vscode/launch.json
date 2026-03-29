@@ -21,11 +21,7 @@
             "module": "example.worker",
             "justMyCode": false,
             "env": {
-                "DISTRIBUTE_DB_HOST": "<TODO: Fill me in!>",
-                "DISTRIBUTE_DB_NAME": "<TODO: Fill me in!>",
-                "DISTRIBUTE_DB_USER": "<TODO: Fill me in!>",
-                "DISTRIBUTE_DB_PASSWORD": "<TODO: Fill me in!>",
-                "DISTRIBUTE_DB_PORT": "<TODO: Fill me in!>",
+                "JOB_NAME": "<TODO: Fill me in!>"
             },
         },
     ]

@@ -197,7 +197,7 @@ def all_tasks_complete(job_name: str, cfg: DatabaseCfg) -> bool:
         cursor.execute(
             f"""
             SELECT COUNT(*) FROM {job_name}
-            WHERE status != 'done'
+            WHERE status NOT IN ('done', 'corrupted')
             """
         )
         (num_not_done,) = cursor.fetchone()
@@ -216,18 +216,24 @@ def mark_task_failed(
             f"""
             UPDATE {job_name}
             SET status = 'pending', worker = 'unassigned'
-            WHERE key = %s
+            WHERE key = %s AND worker = %s AND status = 'processing'
             """,
-            (key,),
+            (key, worker_name),
         )
-        cursor.execute(
-            f"""
-            UPDATE {job_name}_workers
-            SET num_failed = num_failed + 1
-            WHERE worker = %s
-            """,
-            (worker_name,),
-        )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                f"UPDATE {job_name} SET status = 'corrupted' WHERE key = %s",
+                (key,),
+            )
+        else:
+            cursor.execute(
+                f"""
+                UPDATE {job_name}_workers
+                SET num_failed = num_failed + 1
+                WHERE worker = %s
+                """,
+                (worker_name,),
+            )
 
 
 def mark_task_done(
@@ -242,18 +248,24 @@ def mark_task_done(
             f"""
             UPDATE {job_name}
             SET status = 'done'
-            WHERE key = %s
+            WHERE key = %s AND worker = %s AND status = 'processing'
             """,
-            (key,),
+            (key, worker_name),
         )
-        cursor.execute(
-            f"""
-            UPDATE {job_name}_workers
-            SET num_done = num_done + 1
-            WHERE worker = %s
-            """,
-            (worker_name,),
-        )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                f"UPDATE {job_name} SET status = 'corrupted' WHERE key = %s",
+                (key,),
+            )
+        else:
+            cursor.execute(
+                f"""
+                UPDATE {job_name}_workers
+                SET num_done = num_done + 1
+                WHERE worker = %s
+                """,
+                (worker_name,),
+            )
 
 
 #################

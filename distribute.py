@@ -130,7 +130,7 @@ class BackoffException(Exception):
     pass
 
 
-@backoff.on_exception(backoff.expo, BackoffException, factor=0.1)
+@backoff.on_exception(backoff.expo, BackoffException, factor=0.1, max_value=60.0)
 def claim_task(
     job_name: str,
     worker_name: str,

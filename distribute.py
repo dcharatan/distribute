@@ -8,7 +8,7 @@ import string
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Generator, Protocol, runtime_checkable
 
 import backoff
 import psycopg2
@@ -355,3 +355,20 @@ def execute_tasks(
             continue
 
         mark_task_done(job_name, worker_name, key, result.getvalue(), cfg)
+
+
+def iterate_results(
+    job_name: str,
+    cfg: DatabaseCfg = read_environment_cfg(),
+) -> Generator[tuple[str, BytesIO], None, None]:
+    """Iterate over completed results in the database."""
+    with get_cursor(cfg) as cursor:
+        cursor.execute(
+            f"""
+            SELECT id, result FROM {job_name} 
+            WHERE status = 'done'
+            """
+        )
+        rows = cursor.fetchall()
+        for id, result_bytes in rows:
+            yield id, BytesIO(result_bytes)

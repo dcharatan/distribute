@@ -1,17 +1,10 @@
-import secrets
-import string
-
 from beartype.claw import beartyping
 
 with beartyping():
-    from distribute import create_job
-
-
-def random_tag() -> str:
-    return "".join(secrets.choice(string.ascii_lowercase) for _ in range(8))
+    from distribute import create_job, make_random_tag
 
 
 if __name__ == "__main__":
-    name = f"test_{random_tag()}"
+    name = f"test_{make_random_tag()}"
     create_job(name, [f"key_{x}" for x in range(100)])
     print(f"Job name: {name}")

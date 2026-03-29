@@ -1,10 +1,14 @@
 import logging
 import os
 import re
+import secrets
+import signal
+import socket
+import string
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -63,6 +67,60 @@ def validate(identifier: str) -> str:
             "Please only use letters, numbers, and underscores."
         )
     return identifier
+
+
+####################
+# Helper Functions #
+####################
+
+
+def make_random_tag() -> str:
+    return "".join(secrets.choice(string.ascii_lowercase) for _ in range(8))
+
+
+#####################
+# Worker Management #
+#####################
+
+
+def register_worker(job_name: str, worker_name: str, cfg: DatabaseCfg) -> None:
+    with get_db_connection(cfg) as connection:
+        cursor = connection.cursor()
+        cursor.execute(
+            f"""
+            INSERT INTO {job_name}_workers (worker, heartbeat, num_failures)
+            VALUES (%s, CURRENT_TIMESTAMP, 0)
+            """,
+            (worker_name,),
+        )
+        cursor.close()
+
+
+def start_heartbeat(
+    job_name: str,
+    worker_name: str,
+    interval_seconds: int,
+    cfg: DatabaseCfg,
+) -> None:
+    def heartbeat():
+        with get_db_connection(cfg) as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {job_name}_workers
+                SET heartbeat = CURRENT_TIMESTAMP
+                WHERE worker = %s
+                """,
+                (worker_name,),
+            )
+            cursor.close()
+
+    def handler(signum: int, frame: Any) -> None:
+        signal.alarm(interval_seconds)
+        heartbeat()
+
+    signal.signal(signal.SIGALRM, handler)
+    signal.alarm(interval_seconds)
 
 
 #################
@@ -125,5 +183,16 @@ def do_work(
     job_name: str,
     work_fn: WorkFn,
     cfg: DatabaseCfg = read_environment_cfg(),
+    worker_heartbeat_seconds: int = 60,
 ) -> None:
+    # Determine
+    worker_name = socket.gethostname() + make_random_tag()
+    register_worker(job_name, worker_name, cfg)
+    start_heartbeat(job_name, worker_name, worker_heartbeat_seconds, cfg)
+
+    while True:
+        import time
+
+        time.sleep(1)
+
     a = 1

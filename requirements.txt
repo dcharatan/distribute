@@ -1,4 +1,3 @@
 beartype
 black
-jaxtyping
 psycopg2-binary

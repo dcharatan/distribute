@@ -89,8 +89,8 @@ def register_worker(job_name: str, worker_name: str, cfg: DatabaseCfg) -> None:
     with get_cursor(cfg) as cursor:
         cursor.execute(
             f"""
-            INSERT INTO {job_name}_workers (worker, heartbeat, num_failed, num_done)
-            VALUES (%s, CURRENT_TIMESTAMP, 0, 0)
+            INSERT INTO {job_name}_workers (worker)
+            VALUES (%s)
             """,
             (worker_name,),
         )
@@ -215,7 +215,7 @@ def mark_task_failed(
         cursor.execute(
             f"""
             UPDATE {job_name}
-            SET status = 'pending', worker = 'unassigned'
+            SET status = 'pending', worker = 'unassigned', num_failed = num_failed + 1
             WHERE key = %s AND worker = %s AND status = 'processing'
             """,
             (key, worker_name),
@@ -240,6 +240,7 @@ def mark_task_done(
     job_name: str,
     worker_name: str,
     key: str,
+    result: bytes,
     cfg: DatabaseCfg,
 ) -> None:
     logging.info(f"Marking task {key} as done.")
@@ -247,10 +248,10 @@ def mark_task_done(
         cursor.execute(
             f"""
             UPDATE {job_name}
-            SET status = 'done'
+            SET status = 'done', timestamp = CURRENT_TIMESTAMP, result = %s
             WHERE key = %s AND worker = %s AND status = 'processing'
             """,
-            (key, worker_name),
+            (psycopg2.Binary(result), key, worker_name),
         )
         if cursor.rowcount == 0:
             cursor.execute(
@@ -290,6 +291,7 @@ def create_job(
             CREATE TABLE IF NOT EXISTS {job_name} (
                 key TEXT PRIMARY KEY,
                 status TEXT DEFAULT 'pending',
+                num_failed INT DEFAULT 0,
                 timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 worker TEXT DEFAULT 'unassigned',
                 result BYTEA DEFAULT NULL
@@ -301,8 +303,8 @@ def create_job(
             CREATE TABLE IF NOT EXISTS {job_name}_workers (
                 worker TEXT PRIMARY KEY,
                 heartbeat TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                num_failed INT,
-                num_done INT
+                num_failed INT DEFAULT 0,
+                num_done INT DEFAULT 0
             )
             """
         )
@@ -353,4 +355,4 @@ def do_work(
             mark_task_failed(job_name, worker_name, key, cfg)
             continue
 
-        mark_task_done(job_name, worker_name, key, cfg)
+        mark_task_done(job_name, worker_name, key, result.getvalue(), cfg)

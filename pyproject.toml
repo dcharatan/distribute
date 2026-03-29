@@ -1,3 +1,23 @@
+[project]
+name = "distribute"
+version = "1.0.0"
+description = "Make distributing tasks easier."
+readme = "README.md"
+requires-python ="~=3.12"
+license = {file = "LICENSE"}
+authors = [
+  {name = "David Charatan", email = "charatan@mit.edu"},
+]
+urls = {repository = "https://github.com/dcharatan/distribute" }
+dependencies = ["psycopg2-binary", "backoff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["distribute.py"]
+
 [tool.ruff]
 # Enable Pyflakes `E` and `F` codes by default.
 select = ["E", "F", "I"]

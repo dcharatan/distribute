@@ -18,8 +18,6 @@ if __name__ == "__main__":
 
     def work_fn(key: str, result: BytesIO) -> None:
         # A dummy task.
-        logging.info(f"Starting task {key}.")
-        sleep(10)
-        logging.info(f"Done with task {key}.")
+        sleep(0.1)
 
     do_work(os.getenv("JOB_NAME"), work_fn)

@@ -35,12 +35,13 @@ It is recommended to create a new PSQL database and user for each project you us
 sudo -u postgres createdb testing
 sudo -u postgres psql -c "CREATE USER testing WITH PASSWORD 'TUW2XXIV0kFRyWp3';"
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE testing TO testing;"
+ALTER DATABASE testing SET idle_in_transaction_session_timeout = '30s';
 ```
 
 You will have to update `/etc/postgresql/14/main/pg_hba.conf` to allow access to this database from anywhere on the internet:
 
 ```
-hostssl      testing             testing         0.0.0.0/0               scram-sha-256
+hostssl testing testing 0.0.0.0/0 scram-sha-256
 ```
 
 Finally, you will have to reload the psql service:

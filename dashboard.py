@@ -10,7 +10,7 @@ from dash import Input, Output, callback, dcc, html
 
 STATUS_COLORS: dict[str, str] = {
     "done": "#34c759",
-    "corrupt": "#ff3b30",
+    "corrupted": "#ff3b30",
     "pending": "#d8d8d8",
     "processing": "#007aff",
 }
@@ -135,7 +135,7 @@ def make_progress_bar(counts: dict[str, int], total: int) -> html.Div:
             }
         )
 
-    order = ["done", "processing", "pending", "corrupt"]
+    order = ["done", "processing", "pending", "corrupted"]
     segments: list[html.Div] = []
     for status in order:
         count = counts.get(status, 0)
@@ -195,11 +195,11 @@ def make_job_card(job: dict) -> html.Div:
 
     pills = [
         make_stat_pill(status, counts.get(status, 0), STATUS_COLORS[status])
-        for status in ["done", "processing", "pending", "corrupt"]
+        for status in ["done", "processing", "pending", "corrupted"]
         if counts.get(status, 0) > 0
     ]
 
-    done = counts.get("done", 0) + counts.get("corrupt", 0)
+    done = counts.get("done", 0) + counts.get("corrupted", 0)
     pct_done = int(done / total * 100) if total else 0
 
     return html.Div(

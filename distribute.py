@@ -215,9 +215,9 @@ def mark_task_failed(
         cursor.execute(
             f"""
             UPDATE {job_name}
-            SET status = 'pending', worker = 'unassigned', num_failed = num_failed + 1
+            SET status = 'pending', worker = 'unassigned', num_failures = num_failures + 1
             WHERE key = %s AND worker = %s AND status = 'processing'
-            """,
+            """,  # noqa: E501
             (key, worker_name),
         )
         if cursor.rowcount == 0:
@@ -229,7 +229,7 @@ def mark_task_failed(
             cursor.execute(
                 f"""
                 UPDATE {job_name}_workers
-                SET num_failed = num_failed + 1
+                SET num_failures = num_failures + 1
                 WHERE worker = %s
                 """,
                 (worker_name,),
@@ -283,15 +283,15 @@ def create_job(
     validate(job_name)
     [validate(key) for key in keys]
 
-    logging.info(f"Creating distributed job {job_name}.")
+    logging.info(f"Creating distributed job {job_name}")
     with get_cursor(cfg) as cursor:
-        logging.info(f"Creating tables for job {job_name}.")
+        logging.info(f"Creating tables for job {job_name}")
         cursor.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {job_name} (
                 key TEXT PRIMARY KEY,
                 status TEXT DEFAULT 'pending',
-                num_failed INT DEFAULT 0,
+                num_failures INT DEFAULT 0,
                 timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 worker TEXT DEFAULT 'unassigned',
                 result BYTEA DEFAULT NULL
@@ -303,13 +303,13 @@ def create_job(
             CREATE TABLE IF NOT EXISTS {job_name}_workers (
                 worker TEXT PRIMARY KEY,
                 heartbeat TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                num_failed INT DEFAULT 0,
+                num_failures INT DEFAULT 0,
                 num_done INT DEFAULT 0
             )
             """
         )
         logging.info(
-            f"Inserting keys for job {job_name}. This can take a while with many keys."
+            f"Inserting keys for job {job_name} (this can take a while with many keys)."
         )
         execute_values(
             cursor,
@@ -335,7 +335,7 @@ def do_work(
     assert worker_timeout_seconds > worker_heartbeat_seconds
 
     # Register the worker.
-    worker_name = socket.gethostname() + make_random_tag()
+    worker_name = f"{socket.gethostname()}_{make_random_tag()}"
     logging.info(f"Worker name: {worker_name}")
     register_worker(job_name, worker_name, cfg)
     start_heartbeat(job_name, worker_name, worker_heartbeat_seconds, cfg)

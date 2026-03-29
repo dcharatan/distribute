@@ -1,10 +1,10 @@
 {
     "configurations": [
         {
-            "name": "Example: Create Job",
+            "name": "Run Example",
             "type": "debugpy",
             "request": "launch",
-            "module": "example.create_job",
+            "module": "example",
             "justMyCode": false,
             "env": {
                 "DISTRIBUTE_DB_HOST": "<TODO: Fill me in!>",

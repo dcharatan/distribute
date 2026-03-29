@@ -1,6 +1,8 @@
 import logging
 import os
+import random
 from io import BytesIO
+from json import dumps
 from time import sleep
 
 from beartype.claw import beartyping
@@ -17,7 +19,10 @@ if __name__ == "__main__":
     )
 
     def work_fn(key: str, result: BytesIO) -> None:
-        # A dummy task.
+        if random.random() < 0.1:
+            raise Exception("Task failed!")
         sleep(0.1)
+        result.write(dumps({"key": 1}).encode())
+
 
     do_work(os.getenv("JOB_NAME"), work_fn)

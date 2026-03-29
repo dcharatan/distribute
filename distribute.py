@@ -287,7 +287,7 @@ def create_job(
         logging.info(f"Creating tables for job {job_name}")
         cursor.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {job_name} (
+            CREATE TABLE {job_name} (
                 key TEXT PRIMARY KEY,
                 status TEXT DEFAULT 'pending',
                 num_failures INT DEFAULT 0,
@@ -299,7 +299,7 @@ def create_job(
         )
         cursor.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {job_name}_workers (
+            CREATE TABLE {job_name}_workers (
                 worker TEXT PRIMARY KEY,
                 heartbeat TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 num_failures INT DEFAULT 0,

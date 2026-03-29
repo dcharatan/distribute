@@ -14,5 +14,19 @@
                 "DISTRIBUTE_DB_PORT": "5432",
             },
         },
+        {
+            "name": "Run Dashboard",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "dashboard",
+            "justMyCode": false,
+            "env": {
+                "DISTRIBUTE_DB_HOST": "schadenfreude.csail.mit.edu",
+                "DISTRIBUTE_DB_NAME": "testing",
+                "DISTRIBUTE_DB_USER": "testing",
+                "DISTRIBUTE_DB_PASSWORD": "TUW2XXIV0kFRyWp3",
+                "DISTRIBUTE_DB_PORT": "5432",
+            },
+        },
     ]
 }

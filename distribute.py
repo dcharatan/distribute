@@ -316,8 +316,10 @@ def do_work(
     work_fn: WorkFn,
     cfg: DatabaseCfg = read_environment_cfg(),
     worker_heartbeat_seconds: int = 60,
-    worker_timeout_seconds: int = 1,
+    worker_timeout_seconds: int = 300,
 ) -> None:
+    assert worker_timeout_seconds > worker_heartbeat_seconds
+
     # Register the worker.
     worker_name = socket.gethostname() + make_random_tag()
     logging.info(f"Worker name: {worker_name}")

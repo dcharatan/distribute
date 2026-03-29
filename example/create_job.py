@@ -13,3 +13,4 @@ def random_tag() -> str:
 if __name__ == "__main__":
     name = f"test_{random_tag()}"
     create_job(name, [f"key_{x}" for x in range(100)])
+    print(f"Job name: {name}")

@@ -149,7 +149,6 @@ def make_progress_bar(counts: dict[str, int], total: int) -> html.Div:
                     "height": "10px",
                     "background": STATUS_COLORS[status],
                     "borderRadius": "0",
-                    "transition": "width 0.4s ease",
                 }
             )
         )
@@ -214,33 +213,19 @@ def make_job_card(job: dict) -> html.Div:
                                 style={
                                     "fontFamily": "ui-monospace, 'SF Mono', 'Menlo', monospace",
                                     "fontWeight": "500",
-                                    "fontSize": "13px",
+                                    "fontSize": "14px",
                                     "color": TEXT_PRIMARY,
                                     "letterSpacing": "0",
                                 },
                             ),
                         ]
                     ),
-                    html.Div(
-                        [
-                            html.Span(
-                                f"{job['num_workers']} worker{'s' if job['num_workers'] != 1 else ''}",
-                                style={
-                                    "fontSize": "12px",
-                                    "color": TEXT_MUTED,
-                                    "marginRight": "12px",
-                                },
-                            ),
-                            html.Span(
-                                f"♥ {heartbeat_str}",
-                                style={
-                                    "fontSize": "12px",
-                                    "color": ACCENT,
-                                    "fontFamily": "ui-monospace, 'SF Mono', monospace",
-                                },
-                            ),
-                        ],
-                        style={"display": "flex", "alignItems": "center"},
+                    html.Span(
+                        heartbeat_str,
+                        style={
+                            "fontSize": "14px",
+                            "color": TEXT_PRIMARY,
+                        },
                     ),
                 ],
                 style={
@@ -258,11 +243,10 @@ def make_job_card(job: dict) -> html.Div:
                         style={"display": "flex", "gap": "6px", "flexWrap": "wrap"},
                     ),
                     html.Span(
-                        f"{pct_done}% complete · {total:,} tasks",
+                        f"{pct_done}% complete · {job['num_workers']} worker{'s' if job['num_workers'] != 1 else ''} · {total:,} tasks",
                         style={
-                            "fontSize": "11px",
+                            "fontSize": "12px",
                             "color": TEXT_MUTED,
-                            "fontFamily": "ui-monospace, 'SF Mono', monospace",
                         },
                     ),
                 ],
@@ -300,96 +284,123 @@ def create_app() -> dash.Dash:
 
     app.layout = html.Div(
         [
-            # Header
+            # Sticky top chrome (header + search)
             html.Div(
                 [
+                    # Header
                     html.Div(
                         [
-                            html.H1(
-                                title,
-                                style={
-                                    "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
-                                    "fontWeight": "600",
-                                    "fontSize": "18px",
-                                    "color": TEXT_PRIMARY,
-                                    "margin": "0",
-                                },
+                            html.Div(
+                                [
+                                    html.H1(
+                                        title,
+                                        style={
+                                            "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
+                                            "fontWeight": "600",
+                                            "fontSize": "18px",
+                                            "color": TEXT_PRIMARY,
+                                            "margin": "0",
+                                        },
+                                    ),
+                                    html.Div(
+                                        id="last-updated",
+                                        style={"fontSize": "12px", "color": TEXT_MUTED},
+                                    ),
+                                ]
                             ),
                             html.Div(
-                                id="last-updated",
-                                style={"fontSize": "12px", "color": TEXT_MUTED},
-                            ),
-                        ]
-                    ),
-                    html.Div(
-                        [
-                            html.Button(
-                                "↻ Refresh",
-                                id="refresh-btn",
-                                n_clicks=0,
+                                [
+                                    html.Button(
+                                        "↻ Refresh",
+                                        id="refresh-btn",
+                                        n_clicks=0,
+                                        style={
+                                            "background": "#ffffff",
+                                            "border": f"1px solid {BORDER}",
+                                            "color": TEXT_PRIMARY,
+                                            "borderRadius": "8px",
+                                            "padding": "6px 14px",
+                                            "cursor": "pointer",
+                                            "fontSize": "13px",
+                                            "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
+                                            "fontWeight": "500",
+                                            "boxShadow": "0 1px 2px rgba(0,0,0,0.06)",
+                                        },
+                                    ),
+                                ],
                                 style={
-                                    "background": "#ffffff",
-                                    "border": f"1px solid {BORDER}",
-                                    "color": TEXT_PRIMARY,
-                                    "borderRadius": "8px",
-                                    "padding": "6px 14px",
-                                    "cursor": "pointer",
-                                    "fontSize": "13px",
-                                    "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
-                                    "fontWeight": "500",
-                                    "transition": "background 0.15s",
-                                    "boxShadow": "0 1px 2px rgba(0,0,0,0.06)",
+                                    "display": "flex",
+                                    "alignItems": "center",
+                                    "gap": "16px",
                                 },
                             ),
                         ],
                         style={
                             "display": "flex",
+                            "justifyContent": "space-between",
                             "alignItems": "center",
-                            "gap": "16px",
+                            "padding": "18px 28px 16px",
+                            "borderBottom": f"1px solid {BORDER}",
+                            "background": "#ffffff",
+                            "flexWrap": "wrap",
+                            "gap": "12px",
                         },
+                    ),
+                    # Search bar
+                    html.Div(
+                        dcc.Input(
+                            id="search-input",
+                            type="text",
+                            placeholder="Search jobs…",
+                            debounce=False,
+                            style={
+                                "width": "100%",
+                                "background": "#ffffff",
+                                "border": f"1px solid {BORDER}",
+                                "borderRadius": "8px",
+                                "color": TEXT_PRIMARY,
+                                "padding": "9px 14px",
+                                "fontSize": "14px",
+                                "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
+                                "outline": "none",
+                                "boxSizing": "border-box",
+                                "boxShadow": "0 1px 2px rgba(0,0,0,0.04)",
+                            },
+                        ),
+                        style={"padding": "14px 28px"},
+                    ),
+                    # Divider
+                    html.Div(
+                        style={
+                            "margin": "0",
+                            "borderTop": f"1px solid {BORDER}",
+                        }
                     ),
                 ],
                 style={
-                    "display": "flex",
-                    "justifyContent": "space-between",
-                    "alignItems": "center",
-                    "padding": "18px 28px 16px",
-                    "borderBottom": f"1px solid {BORDER}",
-                    "background": "#ffffff",
-                    "flexWrap": "wrap",
-                    "gap": "12px",
+                    "position": "sticky",
+                    "top": "0",
+                    "zIndex": "100",
+                    "background": PAGE_BG,
                 },
             ),
-            # Search Bar
+            # Scrollable job list
             html.Div(
-                dcc.Input(
-                    id="search-input",
-                    type="text",
-                    placeholder="Search jobs…",
-                    debounce=False,
-                    style={
-                        "width": "100%",
-                        "background": "#ffffff",
-                        "border": f"1px solid {BORDER}",
-                        "borderRadius": "8px",
-                        "color": TEXT_PRIMARY,
-                        "padding": "9px 14px",
-                        "fontSize": "14px",
-                        "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
-                        "outline": "none",
-                        "boxSizing": "border-box",
-                        "boxShadow": "0 1px 2px rgba(0,0,0,0.04)",
-                    },
-                ),
-                style={"padding": "16px 28px 8px"},
+                id="job-list",
+                style={
+                    "padding": "16px 28px 28px",
+                    "overflowY": "auto",
+                    "flex": "1",
+                },
             ),
-            # Job List
-            html.Div(id="job-list", style={"padding": "8px 28px 28px"}),
         ],
         style={
             "background": PAGE_BG,
-            "minHeight": "100vh",
+            "height": "100vh",
+            "display": "flex",
+            "flexDirection": "column",
             "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif",
+            "overflow": "hidden",
         },
     )
 

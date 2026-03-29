@@ -1,5 +1,3 @@
-"""Distributed task monitoring dashboard."""
-
 import argparse
 import os
 from datetime import datetime, timezone
@@ -25,6 +23,8 @@ TEXT_PRIMARY = "#1d1d1f"
 TEXT_MUTED = "#86868b"
 ACCENT = "#007aff"
 
+DEFAULT_INTERVAL_S = 30
+
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 def get_connection() -> psycopg2.extensions.connection:
@@ -43,7 +43,6 @@ def fetch_jobs() -> list[dict]:
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # Discover job tables (exclude *_workers tables)
             cur.execute(
                 """
                 SELECT table_name
@@ -58,7 +57,6 @@ def fetch_jobs() -> list[dict]:
 
             jobs: list[dict] = []
             for table in job_tables:
-                # Status counts
                 cur.execute(
                     f"""
                     SELECT status, COUNT(*) AS cnt
@@ -70,7 +68,6 @@ def fetch_jobs() -> list[dict]:
                     r["status"]: int(r["cnt"]) for r in cur.fetchall()
                 }
 
-                # Latest heartbeat from workers table (may not exist)
                 workers_table = f"{table}_workers"
                 latest_heartbeat: datetime | None = None
                 num_workers: int = 0
@@ -98,7 +95,6 @@ def fetch_jobs() -> list[dict]:
                     }
                 )
 
-            # Sort by most recent heartbeat (None goes last)
             jobs.sort(
                 key=lambda j: j["latest_heartbeat"]
                 or datetime.min.replace(tzinfo=timezone.utc),
@@ -141,14 +137,11 @@ def make_progress_bar(counts: dict[str, int], total: int) -> html.Div:
 
     order = ["done", "processing", "pending", "corrupt"]
     segments: list[html.Div] = []
-    for i, status in enumerate(order):
+    for status in order:
         count = counts.get(status, 0)
         if count == 0:
             continue
         pct = count / total * 100
-        radius = {}
-        # First and last visible segments get rounded ends
-        is_first = not segments
         segments.append(
             html.Div(
                 style={
@@ -156,7 +149,6 @@ def make_progress_bar(counts: dict[str, int], total: int) -> html.Div:
                     "height": "10px",
                     "background": STATUS_COLORS[status],
                     "borderRadius": "0",
-                    **radius,
                     "transition": "width 0.4s ease",
                 }
             )
@@ -177,31 +169,6 @@ def make_progress_bar(counts: dict[str, int], total: int) -> html.Div:
             "background": BORDER,
         },
     )
-
-
-def make_legend() -> html.Div:
-    """Render the status color legend."""
-    items = [
-        html.Div(
-            [
-                html.Span(
-                    style={
-                        "display": "inline-block",
-                        "width": "10px",
-                        "height": "10px",
-                        "borderRadius": "2px",
-                        "background": color,
-                        "marginRight": "5px",
-                        "flexShrink": "0",
-                    }
-                ),
-                html.Span(label, style={"fontSize": "11px", "color": TEXT_MUTED}),
-            ],
-            style={"display": "flex", "alignItems": "center", "gap": "2px"},
-        )
-        for label, color in STATUS_COLORS.items()
-    ]
-    return html.Div(items, style={"display": "flex", "gap": "16px", "flexWrap": "wrap"})
 
 
 def make_stat_pill(label: str, value: int, color: str) -> html.Span:
@@ -238,7 +205,6 @@ def make_job_card(job: dict) -> html.Div:
 
     return html.Div(
         [
-            # Header row
             html.Div(
                 [
                     html.Div(
@@ -284,9 +250,7 @@ def make_job_card(job: dict) -> html.Div:
                     "marginBottom": "10px",
                 },
             ),
-            # Progress bar
             make_progress_bar(counts, total),
-            # Footer row
             html.Div(
                 [
                     html.Div(
@@ -323,38 +287,31 @@ def make_job_card(job: dict) -> html.Div:
     )
 
 
-# ── App factory ────────────────────────────────────────────────────────────────
-def create_app(poll_interval_s: int = 30) -> dash.Dash:
-    """Create and configure the Dash app."""
+def create_app() -> dash.Dash:
+    title = f"Task Monitor: {os.environ['DISTRIBUTE_DB_NAME']}"
     app = dash.Dash(
         __name__,
         external_stylesheets=[
             "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap",
             dbc.themes.BOOTSTRAP,
         ],
-        title="Task Monitor",
+        title=title,
     )
 
     app.layout = html.Div(
         [
-            dcc.Interval(
-                id="auto-refresh",
-                interval=poll_interval_s * 1000,
-                n_intervals=0,
-            ),
-            # ── Page header ────────────────────────────────────────────────
+            # Header
             html.Div(
                 [
                     html.Div(
                         [
                             html.H1(
-                                "Task Monitor",
+                                title,
                                 style={
                                     "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
                                     "fontWeight": "600",
                                     "fontSize": "18px",
                                     "color": TEXT_PRIMARY,
-                                    "letterSpacing": "-0.01em",
                                     "margin": "0",
                                 },
                             ),
@@ -366,7 +323,6 @@ def create_app(poll_interval_s: int = 30) -> dash.Dash:
                     ),
                     html.Div(
                         [
-                            make_legend(),
                             html.Button(
                                 "↻ Refresh",
                                 id="refresh-btn",
@@ -404,7 +360,7 @@ def create_app(poll_interval_s: int = 30) -> dash.Dash:
                     "gap": "12px",
                 },
             ),
-            # ── Search bar ─────────────────────────────────────────────────
+            # Search Bar
             html.Div(
                 dcc.Input(
                     id="search-input",
@@ -427,7 +383,7 @@ def create_app(poll_interval_s: int = 30) -> dash.Dash:
                 ),
                 style={"padding": "16px 28px 8px"},
             ),
-            # ── Job list ───────────────────────────────────────────────────
+            # Job List
             html.Div(id="job-list", style={"padding": "8px 28px 28px"}),
         ],
         style={
@@ -437,15 +393,14 @@ def create_app(poll_interval_s: int = 30) -> dash.Dash:
         },
     )
 
+    # Job List Update
     @callback(
         Output("job-list", "children"),
         Output("last-updated", "children"),
-        Input("auto-refresh", "n_intervals"),
         Input("refresh-btn", "n_clicks"),
         Input("search-input", "value"),
     )
     def update_jobs(
-        _n_intervals: int,
         _n_clicks: int,
         search: str | None,
     ) -> tuple[list, str]:
@@ -490,38 +445,12 @@ def create_app(poll_interval_s: int = 30) -> dash.Dash:
     return app
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
 def main() -> None:
-    """Parse CLI args and launch the dashboard."""
-    parser = argparse.ArgumentParser(
-        description="Distributed task monitoring dashboard"
-    )
-    parser.add_argument(
-        "--poll-interval",
-        type=int,
-        default=30,
-        help="Auto-refresh interval in seconds (default: 30)",
-    )
-    parser.add_argument(
-        "--port", type=int, default=8050, help="Port to serve on (default: 8050)"
-    )
-    parser.add_argument("--debug", action="store_true", help="Enable Dash debug mode")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8050)
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
-
-    # Validate env vars are present
-    required = [
-        "DISTRIBUTE_DB_HOST",
-        "DISTRIBUTE_DB_NAME",
-        "DISTRIBUTE_DB_USER",
-        "DISTRIBUTE_DB_PASSWORD",
-    ]
-    missing = [v for v in required if not os.environ.get(v)]
-    if missing:
-        raise RuntimeError(
-            f"Missing required environment variables: {', '.join(missing)}"
-        )
-
-    app = create_app(poll_interval_s=args.poll_interval)
+    app = create_app()
     app.run(host="0.0.0.0", port=args.port, debug=args.debug)
 
 

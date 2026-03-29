@@ -365,10 +365,10 @@ def iterate_results(
     with get_cursor(cfg) as cursor:
         cursor.execute(
             f"""
-            SELECT id, result FROM {job_name} 
+            SELECT key, result FROM {job_name} 
             WHERE status = 'done'
             """
         )
         rows = cursor.fetchall()
-        for id, result_bytes in rows:
-            yield id, BytesIO(result_bytes)
+        for key, result_bytes in rows:
+            yield key, BytesIO(result_bytes)

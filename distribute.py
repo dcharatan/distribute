@@ -151,7 +151,6 @@ def claim_task(
                 OR w.heartbeat < NOW() - INTERVAL '{worker_timeout_seconds} seconds'
             )
             LIMIT 1
-            FOR UPDATE OF t SKIP LOCKED
             """
         )
         row = cursor.fetchone()

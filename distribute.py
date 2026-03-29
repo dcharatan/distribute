@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Protocol, runtime_checkable
 
+import backoff
 import psycopg2
 from psycopg2.extras import execute_values
 
@@ -38,7 +39,7 @@ def read_environment_cfg() -> DatabaseCfg:
 
 
 @contextmanager
-def get_db_connection(cfg: DatabaseCfg):
+def get_cursor(cfg: DatabaseCfg):
     """Context manager for database connections."""
     connection = psycopg2.connect(
         host=cfg.host,
@@ -49,14 +50,15 @@ def get_db_connection(cfg: DatabaseCfg):
         sslmode="require",
         gssencmode="disable",
     )
-
+    cursor = connection.cursor()
     try:
-        yield connection
+        yield cursor
         connection.commit()
     except Exception:
         connection.rollback()
         raise
     finally:
+        cursor.close()
         connection.close()
 
 
@@ -84,16 +86,14 @@ def make_random_tag() -> str:
 
 
 def register_worker(job_name: str, worker_name: str, cfg: DatabaseCfg) -> None:
-    with get_db_connection(cfg) as connection:
-        cursor = connection.cursor()
+    with get_cursor(cfg) as cursor:
         cursor.execute(
             f"""
-            INSERT INTO {job_name}_workers (worker, heartbeat, num_failures)
-            VALUES (%s, CURRENT_TIMESTAMP, 0)
+            INSERT INTO {job_name}_workers (worker, heartbeat, num_failed, num_done)
+            VALUES (%s, CURRENT_TIMESTAMP, 0, 0)
             """,
             (worker_name,),
         )
-        cursor.close()
 
 
 def start_heartbeat(
@@ -103,8 +103,7 @@ def start_heartbeat(
     cfg: DatabaseCfg,
 ) -> None:
     def heartbeat():
-        with get_db_connection(cfg) as connection:
-            cursor = connection.cursor()
+        with get_cursor(cfg) as cursor:
             cursor.execute(
                 f"""
                 UPDATE {job_name}_workers
@@ -113,7 +112,6 @@ def start_heartbeat(
                 """,
                 (worker_name,),
             )
-            cursor.close()
 
     def handler(signum: int, frame: Any) -> None:
         signal.alarm(interval_seconds)
@@ -121,6 +119,141 @@ def start_heartbeat(
 
     signal.signal(signal.SIGALRM, handler)
     signal.alarm(interval_seconds)
+
+
+##############
+# Task Queue #
+##############
+
+
+class BackoffException(Exception):
+    pass
+
+
+@backoff.on_exception(backoff.expo, BackoffException, factor=0.1)
+def claim_task(
+    job_name: str,
+    worker_name: str,
+    worker_timeout_seconds: int,
+    cfg: DatabaseCfg,
+) -> str | None:
+    with get_cursor(cfg) as cursor:
+        # Claim a pending key that has either:
+        # (1) never been assigned to a worker
+        # (2) been assigned to a worker whose last heartbeat was long ago
+        cursor.execute(
+            f"""
+            SELECT t.key FROM {job_name} t
+            LEFT JOIN {job_name}_workers w ON t.worker = w.worker
+            WHERE t.status IN ('pending', 'processing')
+            AND (
+                t.worker = 'unassigned'
+                OR w.heartbeat < NOW() - INTERVAL '{worker_timeout_seconds} seconds'
+            )
+            LIMIT 1
+            FOR UPDATE OF t SKIP LOCKED
+            """
+        )
+        row = cursor.fetchone()
+
+        # If no such key was found, exit.
+        if row is None:
+            logging.info("No tasks found. Checking for completion.")
+
+            # If all tasks are complete, return None.
+            if all_tasks_complete(job_name, cfg):
+                return None
+
+            # If tasks remain, we're waiting for other nodes to finish or time out.
+            raise BackoffException()
+
+        # Mark the item as in progress.
+        (key,) = row
+        cursor.execute(
+            f"""
+            UPDATE {job_name} t
+            SET status = 'processing', timestamp = CURRENT_TIMESTAMP, worker = %s
+            FROM {job_name}_workers w
+            WHERE t.key = %s
+            AND t.status IN ('pending', 'processing')
+            AND (
+                t.worker = 'unassigned'
+                OR w.worker = t.worker AND w.heartbeat < NOW() - INTERVAL '{worker_timeout_seconds} seconds'
+            )
+            """,  # noqa: E501
+            (worker_name, key),
+        )
+
+        # If another worked claimed the key, try again.
+        if cursor.rowcount == 0:
+            logging.info(f"Skipping {key} since it was already claimed.")
+            raise BackoffException()
+
+        return key
+
+
+def all_tasks_complete(job_name: str, cfg: DatabaseCfg) -> bool:
+    with get_cursor(cfg) as cursor:
+        cursor.execute(
+            f"""
+            SELECT COUNT(*) FROM {job_name}
+            WHERE status != 'done'
+            """
+        )
+        (num_not_done,) = cursor.fetchone()
+        return num_not_done == 0
+
+
+def mark_task_failed(
+    job_name: str,
+    worker_name: str,
+    key: str,
+    cfg: DatabaseCfg,
+) -> None:
+    logging.info(f"Marking task {key} as failed.")
+    with get_cursor(cfg) as cursor:
+        cursor.execute(
+            f"""
+            UPDATE {job_name}
+            SET status = 'pending', worker = 'unassigned'
+            WHERE key = %s
+            """,
+            (key,),
+        )
+        cursor.execute(
+            f"""
+            UPDATE {job_name}_workers
+            SET num_failed = num_failed + 1
+            WHERE worker = %s
+            """,
+            (worker_name,),
+        )
+
+
+def mark_task_done(
+    job_name: str,
+    worker_name: str,
+    key: str,
+    cfg: DatabaseCfg,
+) -> None:
+    logging.info(f"Marking task {key} as done.")
+    with get_cursor(cfg) as cursor:
+        cursor.execute(
+            f"""
+            UPDATE {job_name}
+            SET status = 'done'
+            WHERE key = %s
+            """,
+            (key,),
+        )
+        cursor.execute(
+            f"""
+            UPDATE {job_name}_workers
+            SET num_done = num_done + 1
+            WHERE worker = %s
+            """,
+            (worker_name,),
+        )
 
 
 #################
@@ -138,8 +271,7 @@ def create_job(
     [validate(key) for key in keys]
 
     logging.info(f"Creating distributed job {job_name}.")
-    with get_db_connection(cfg) as connection:
-        cursor = connection.cursor()
+    with get_cursor(cfg) as cursor:
         logging.info(f"Creating tables for job {job_name}.")
         cursor.execute(
             f"""
@@ -157,7 +289,8 @@ def create_job(
             CREATE TABLE IF NOT EXISTS {job_name}_workers (
                 worker TEXT PRIMARY KEY,
                 heartbeat TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                num_failures INT
+                num_failed INT,
+                num_done INT
             )
             """
         )
@@ -169,7 +302,6 @@ def create_job(
             f"INSERT INTO {job_name} (key) VALUES %s ON CONFLICT (key) DO NOTHING",
             [(key,) for key in keys],
         )
-        cursor.close()
 
 
 @runtime_checkable
@@ -184,15 +316,27 @@ def do_work(
     work_fn: WorkFn,
     cfg: DatabaseCfg = read_environment_cfg(),
     worker_heartbeat_seconds: int = 60,
+    worker_timeout_seconds: int = 1,
 ) -> None:
-    # Determine
+    # Register the worker.
     worker_name = socket.gethostname() + make_random_tag()
+    logging.info(f"Worker name: {worker_name}")
     register_worker(job_name, worker_name, cfg)
     start_heartbeat(job_name, worker_name, worker_heartbeat_seconds, cfg)
 
     while True:
-        import time
+        # Claim a task.
+        key = claim_task(job_name, worker_name, worker_timeout_seconds, cfg)
+        if key is None:
+            # All tasks are done, so exit!
+            return
 
-        time.sleep(1)
+        # Execute the task.
+        try:
+            result = BytesIO()
+            work_fn(key, result)
+        except Exception:
+            mark_task_failed(job_name, worker_name, key, cfg)
+            continue
 
-    a = 1
+        mark_task_done(job_name, worker_name, key, cfg)

@@ -319,15 +319,15 @@ def create_job(
 
 
 @runtime_checkable
-class WorkFn(Protocol):
+class TaskFn(Protocol):
     def __call__(self, key: str, result: BytesIO) -> None:
         """Process the specified key and write the result to the provided BytesIO."""
         pass
 
 
-def do_work(
+def execute_tasks(
     job_name: str,
-    work_fn: WorkFn,
+    task_fn: TaskFn,
     cfg: DatabaseCfg = read_environment_cfg(),
     worker_heartbeat_seconds: int = 60,
     worker_timeout_seconds: int = 300,
@@ -350,7 +350,7 @@ def do_work(
         # Execute the task.
         try:
             result = BytesIO()
-            work_fn(key, result)
+            task_fn(key, result)
         except Exception:
             mark_task_failed(job_name, worker_name, key, cfg)
             continue

@@ -8,7 +8,7 @@ from time import sleep
 from beartype.claw import beartyping
 
 with beartyping():
-    from distribute import do_work
+    from distribute import execute_tasks
 
 
 if __name__ == "__main__":
@@ -18,11 +18,10 @@ if __name__ == "__main__":
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    def work_fn(key: str, result: BytesIO) -> None:
+    def task_fn(key: str, result: BytesIO) -> None:
         if random.random() < 0.1:
             raise Exception("Task failed!")
         sleep(0.1)
         result.write(dumps({"key": 1}).encode())
 
-
-    do_work(os.getenv("JOB_NAME"), work_fn)
+    execute_tasks(os.getenv("JOB_NAME"), task_fn)

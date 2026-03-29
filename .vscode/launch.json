@@ -7,21 +7,11 @@
             "module": "example",
             "justMyCode": false,
             "env": {
-                "DISTRIBUTE_DB_HOST": "<TODO: Fill me in!>",
-                "DISTRIBUTE_DB_NAME": "<TODO: Fill me in!>",
-                "DISTRIBUTE_DB_USER": "<TODO: Fill me in!>",
-                "DISTRIBUTE_DB_PASSWORD": "<TODO: Fill me in!>",
-                "DISTRIBUTE_DB_PORT": "<TODO: Fill me in!>",
-            },
-        },
-        {
-            "name": "Example: Run Worker",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "example.worker",
-            "justMyCode": false,
-            "env": {
-                "JOB_NAME": "<TODO: Fill me in!>"
+                "DISTRIBUTE_DB_HOST": "schadenfreude.csail.mit.edu",
+                "DISTRIBUTE_DB_NAME": "testing",
+                "DISTRIBUTE_DB_USER": "testing",
+                "DISTRIBUTE_DB_PASSWORD": "TUW2XXIV0kFRyWp3",
+                "DISTRIBUTE_DB_PORT": "5432",
             },
         },
     ]

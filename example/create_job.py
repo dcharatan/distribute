@@ -1,6 +1,7 @@
-from beartype.claw import beartyping
 import secrets
 import string
+
+from beartype.claw import beartyping
 
 with beartyping():
     from distribute import create_job

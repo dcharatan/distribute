@@ -1,10 +1,13 @@
-from dataclasses import dataclass
-import os
-import psycopg2
-from contextlib import contextmanager
-from psycopg2.extras import execute_values
 import logging
+import os
 import re
+from contextlib import contextmanager
+from dataclasses import dataclass
+from io import BytesIO
+from typing import Protocol, runtime_checkable
+
+import psycopg2
+from psycopg2.extras import execute_values
 
 ##########################
 # Database Configuration #
@@ -109,3 +112,18 @@ def create_job(
             [(key,) for key in keys],
         )
         cursor.close()
+
+
+@runtime_checkable
+class WorkFn(Protocol):
+    def __call__(self, key: str, result: BytesIO) -> None:
+        """Process the specified key and write the result to the provided BytesIO."""
+        pass
+
+
+def do_work(
+    job_name: str,
+    work_fn: WorkFn,
+    cfg: DatabaseCfg = read_environment_cfg(),
+) -> None:
+    a = 1

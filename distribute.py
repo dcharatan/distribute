@@ -8,7 +8,7 @@ import string
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Generator, Protocol, runtime_checkable
 
 import backoff
 import psycopg2
@@ -316,7 +316,7 @@ def create_job(
         logging.info(f"Creating tables for job {job_name}")
         cursor.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {job_name} (
+            CREATE TABLE {job_name} (
                 key TEXT PRIMARY KEY,
                 status TEXT DEFAULT 'pending',
                 num_failures INT DEFAULT 0,
@@ -328,7 +328,7 @@ def create_job(
         )
         cursor.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {job_name}_workers (
+            CREATE TABLE {job_name}_workers (
                 worker TEXT PRIMARY KEY,
                 heartbeat TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 num_failures INT DEFAULT 0,
@@ -434,3 +434,20 @@ def execute_tasks_batched(
             mark_task_done(job_name, worker_name, key, result.getvalue(), cfg)
             for key, result in zip(keys, result)
         ]
+
+
+def iterate_results(
+    job_name: str,
+    cfg: DatabaseCfg = read_environment_cfg(),
+) -> Generator[tuple[str, BytesIO], None, None]:
+    """Iterate over completed results in the database."""
+    with get_cursor(cfg) as cursor:
+        cursor.execute(
+            f"""
+            SELECT key, result FROM {job_name} 
+            WHERE status = 'done'
+            """
+        )
+        rows = cursor.fetchall()
+        for key, result_bytes in rows:
+            yield key, BytesIO(result_bytes)

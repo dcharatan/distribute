@@ -307,9 +307,7 @@ def create_job(
     keys: list[str],
     cfg: DatabaseCfg = read_environment_cfg(),
 ) -> None:
-    # Ensure that everything is fine to put in a SQL database.
     validate(job_name)
-    [validate(key) for key in keys]
 
     logging.info(f"Creating distributed job {job_name}")
     with get_cursor(cfg) as cursor:

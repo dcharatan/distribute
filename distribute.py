@@ -5,6 +5,7 @@ import secrets
 import signal
 import socket
 import string
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
@@ -385,6 +386,7 @@ def execute_tasks(
             result = BytesIO()
             task_fn(key, result)
         except Exception:
+            traceback.print_exception()
             mark_task_failed(job_name, worker_name, key, cfg)
             continue
 

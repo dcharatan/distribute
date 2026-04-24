@@ -3,7 +3,7 @@ name = "distribute"
 version = "1.0.0"
 description = "Make distributing tasks easier."
 readme = "README.md"
-requires-python ="~=3.12"
+requires-python =">=3.10"
 license = {file = "LICENSE"}
 authors = [
   {name = "David Charatan", email = "charatan@mit.edu"},

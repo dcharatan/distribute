@@ -386,7 +386,7 @@ def execute_tasks(
             result = BytesIO()
             task_fn(key, result)
         except Exception:
-            traceback.print_exception()
+            traceback.print_exc()
             mark_task_failed(job_name, worker_name, key, cfg)
             continue
 
@@ -427,7 +427,7 @@ def execute_tasks_batched(
             result = [BytesIO() for _ in keys]
             task_fn(tuple(keys), tuple(result))
         except Exception:
-            traceback.print_exception()
+            traceback.print_exc()
             [mark_task_failed(job_name, worker_name, key, cfg) for key in keys]
             continue
 

@@ -5,6 +5,7 @@ import secrets
 import signal
 import socket
 import string
+import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
@@ -136,6 +137,7 @@ def claim_task(
     worker_name: str,
     worker_timeout_seconds: int,
     cfg: DatabaseCfg,
+    soft: bool = False,
 ) -> str | None:
     with get_cursor(cfg) as cursor:
         # Claim a pending key that has either:
@@ -160,7 +162,7 @@ def claim_task(
             logging.info("No tasks found. Checking for completion.")
 
             # If all tasks are complete, return None.
-            if all_tasks_complete(job_name, cfg):
+            if soft or all_tasks_complete(job_name, cfg):
                 return None
 
             # If tasks remain, we're waiting for other nodes to finish or time out.
@@ -189,6 +191,34 @@ def claim_task(
             raise BackoffException()
 
         return key
+
+
+@backoff.on_exception(backoff.expo, BackoffException, factor=5.0, max_value=120.0)
+def claim_tasks(
+    job_name: str,
+    worker_name: str,
+    worker_timeout_seconds: int,
+    cfg: DatabaseCfg,
+    num_tasks: int,
+) -> tuple[str, ...] | None:
+    # Look for available tasks.
+    keys = []
+    for _ in range(num_tasks):
+        key = claim_task(job_name, worker_name, worker_timeout_seconds, cfg, soft=True)
+        if key is None:
+            break
+        keys.append(key)
+
+    # If tasks were found, return them.
+    if keys:
+        return tuple(keys)
+
+    # If no tasks were found, check for completion. If tasks remain, wait.
+    if not all_tasks_complete(job_name, cfg):
+        raise BackoffException()
+
+    # On completion, return None.
+    return None
 
 
 def all_tasks_complete(job_name: str, cfg: DatabaseCfg) -> bool:
@@ -278,9 +308,7 @@ def create_job(
     keys: list[str],
     cfg: DatabaseCfg = read_environment_cfg(),
 ) -> None:
-    # Ensure that everything is fine to put in a SQL database.
     validate(job_name)
-    [validate(key) for key in keys]
 
     logging.info(f"Creating distributed job {job_name}")
     with get_cursor(cfg) as cursor:
@@ -324,6 +352,13 @@ class TaskFn(Protocol):
         pass
 
 
+@runtime_checkable
+class BatchedTaskFn(Protocol):
+    def __call__(self, key: tuple[str, ...], result: tuple[BytesIO, ...]) -> None:
+        """Process the specified keys and write the result to the provided BytesIOs."""
+        pass
+
+
 def execute_tasks(
     job_name: str,
     task_fn: TaskFn,
@@ -351,10 +386,55 @@ def execute_tasks(
             result = BytesIO()
             task_fn(key, result)
         except Exception:
+            traceback.print_exc()
             mark_task_failed(job_name, worker_name, key, cfg)
             continue
 
         mark_task_done(job_name, worker_name, key, result.getvalue(), cfg)
+
+
+def execute_tasks_batched(
+    job_name: str,
+    task_fn: BatchedTaskFn,
+    batch_size: int,
+    cfg: DatabaseCfg = read_environment_cfg(),
+    worker_heartbeat_seconds: int = 60,
+    worker_timeout_seconds: int = 300,
+) -> None:
+    assert worker_timeout_seconds > worker_heartbeat_seconds
+
+    # Register the worker.
+    worker_name = f"{socket.gethostname()}_{make_random_tag()}"
+    logging.info(f"Worker name: {worker_name}")
+    register_worker(job_name, worker_name, cfg)
+    start_heartbeat(job_name, worker_name, worker_heartbeat_seconds, cfg)
+
+    while True:
+        # Claim tasks.
+        keys = claim_tasks(
+            job_name,
+            worker_name,
+            worker_timeout_seconds,
+            cfg,
+            batch_size,
+        )
+        if keys is None:
+            # All tasks are done, so exit!
+            return
+
+        # Execute the task.
+        try:
+            result = [BytesIO() for _ in keys]
+            task_fn(tuple(keys), tuple(result))
+        except Exception:
+            traceback.print_exc()
+            [mark_task_failed(job_name, worker_name, key, cfg) for key in keys]
+            continue
+
+        [
+            mark_task_done(job_name, worker_name, key, result.getvalue(), cfg)
+            for key, result in zip(keys, result)
+        ]
 
 
 def iterate_results(

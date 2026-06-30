@@ -43,41 +43,49 @@ def fetch_jobs() -> list[dict]:
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = 'public'
-                  AND table_type = 'BASE TABLE'
-                  AND table_name NOT LIKE '%_workers'
-                ORDER BY table_name
-                """
-            )
+            # A job table is any base table in `public` that has a `status` column
+            # (and isn't a `_workers` companion table). Filtering by structure
+            # rather than name avoids hitting unrelated tables (migrations,
+            # config, lookups) with `SELECT status, ...`.
+            cur.execute("""
+                SELECT t.table_name
+                FROM information_schema.tables AS t
+                JOIN information_schema.columns AS c
+                  ON c.table_schema = t.table_schema
+                 AND c.table_name = t.table_name
+                WHERE t.table_schema = 'public'
+                  AND t.table_type = 'BASE TABLE'
+                  AND c.column_name = 'status'
+                  AND t.table_name NOT LIKE '%_workers'
+                ORDER BY t.table_name
+                """)
             job_tables: list[str] = [row["table_name"] for row in cur.fetchall()]
 
             jobs: list[dict] = []
             for table in job_tables:
-                cur.execute(
-                    f"""
-                    SELECT status, COUNT(*) AS cnt
-                    FROM {psycopg2.extensions.quote_ident(table, cur)}
-                    GROUP BY status
-                    """
-                )
-                counts: dict[str, int] = {
-                    r["status"]: int(r["cnt"]) for r in cur.fetchall()
-                }
+                # Defense in depth: if a table is mid-migration or malformed,
+                # skip it rather than aborting the whole fetch.
+                try:
+                    cur.execute(f"""
+                        SELECT status, COUNT(*) AS cnt
+                        FROM {psycopg2.extensions.quote_ident(table, cur)}
+                        GROUP BY status
+                        """)
+                    counts: dict[str, int] = {
+                        r["status"]: int(r["cnt"]) for r in cur.fetchall()
+                    }
+                except psycopg2.errors.UndefinedColumn:
+                    conn.rollback()
+                    continue
 
                 workers_table = f"{table}_workers"
                 latest_heartbeat: datetime | None = None
                 num_workers: int = 0
                 try:
-                    cur.execute(
-                        f"""
+                    cur.execute(f"""
                         SELECT MAX(heartbeat) AS latest, COUNT(*) AS cnt
                         FROM {psycopg2.extensions.quote_ident(workers_table, cur)}
-                        """
-                    )
+                        """)
                     row = cur.fetchone()
                     if row and row["latest"]:
                         latest_heartbeat = row["latest"]

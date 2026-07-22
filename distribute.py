@@ -2,14 +2,15 @@ import logging
 import os
 import re
 import secrets
-import signal
 import socket
 import string
+import threading
+import time
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any, Generator, Protocol, runtime_checkable
+from typing import Generator, Protocol, runtime_checkable
 
 import backoff
 import psycopg2
@@ -103,23 +104,28 @@ def start_heartbeat(
     interval_seconds: int,
     cfg: DatabaseCfg,
 ) -> None:
-    def heartbeat():
-        with get_cursor(cfg) as cursor:
-            cursor.execute(
-                f"""
-                UPDATE {job_name}_workers
-                SET heartbeat = CURRENT_TIMESTAMP
-                WHERE worker = %s
-                """,
-                (worker_name,),
-            )
+    # The heartbeat runs in a daemon thread on its own connection. A SIGALRM
+    # handler would instead fire on the main thread mid-task, and if it landed
+    # inside a mark_task_* transaction that already holds this worker's row, its
+    # own heartbeat UPDATE would block on that lock while the main thread is
+    # parked in the handler and can never commit.
+    def heartbeat_loop() -> None:
+        while True:
+            time.sleep(interval_seconds)
+            try:
+                with get_cursor(cfg) as cursor:
+                    cursor.execute(
+                        f"""
+                        UPDATE {job_name}_workers
+                        SET heartbeat = CURRENT_TIMESTAMP
+                        WHERE worker = %s
+                        """,
+                        (worker_name,),
+                    )
+            except Exception:
+                logging.exception("Heartbeat failed; retrying next interval.")
 
-    def handler(signum: int, frame: Any) -> None:
-        signal.alarm(interval_seconds)
-        heartbeat()
-
-    signal.signal(signal.SIGALRM, handler)
-    signal.alarm(interval_seconds)
+    threading.Thread(target=heartbeat_loop, daemon=True).start()
 
 
 ##############
@@ -131,7 +137,13 @@ class BackoffException(Exception):
     pass
 
 
-@backoff.on_exception(backoff.expo, BackoffException, factor=0.1, max_value=60.0)
+@backoff.on_exception(
+    backoff.expo,
+    BackoffException,
+    factor=0.1,
+    max_value=60.0,
+    base=1.2,
+)
 def claim_task(
     job_name: str,
     worker_name: str,
@@ -143,8 +155,7 @@ def claim_task(
         # Claim a pending key that has either:
         # (1) never been assigned to a worker
         # (2) been assigned to a worker whose last heartbeat was long ago
-        cursor.execute(
-            f"""
+        cursor.execute(f"""
             SELECT t.key FROM {job_name} t
             LEFT JOIN {job_name}_workers w ON t.worker = w.worker
             WHERE t.status IN ('pending', 'processing')
@@ -153,8 +164,7 @@ def claim_task(
                 OR w.heartbeat < NOW() - INTERVAL '{worker_timeout_seconds} seconds'
             )
             LIMIT 1
-            """
-        )
+            """)
         row = cursor.fetchone()
 
         # If no such key was found, exit.
@@ -193,7 +203,13 @@ def claim_task(
         return key
 
 
-@backoff.on_exception(backoff.expo, BackoffException, factor=5.0, max_value=120.0)
+@backoff.on_exception(
+    backoff.expo,
+    BackoffException,
+    factor=5.0,
+    max_value=120.0,
+    base=1.2,
+)
 def claim_tasks(
     job_name: str,
     worker_name: str,
@@ -223,12 +239,10 @@ def claim_tasks(
 
 def all_tasks_complete(job_name: str, cfg: DatabaseCfg) -> bool:
     with get_cursor(cfg) as cursor:
-        cursor.execute(
-            f"""
+        cursor.execute(f"""
             SELECT COUNT(*) FROM {job_name}
             WHERE status NOT IN ('done', 'corrupted')
-            """
-        )
+            """)
         (num_not_done,) = cursor.fetchone()
         return num_not_done == 0
 
@@ -313,8 +327,7 @@ def create_job(
     logging.info(f"Creating distributed job {job_name}")
     with get_cursor(cfg) as cursor:
         logging.info(f"Creating tables for job {job_name}")
-        cursor.execute(
-            f"""
+        cursor.execute(f"""
             CREATE TABLE {job_name} (
                 key TEXT PRIMARY KEY,
                 status TEXT DEFAULT 'pending',
@@ -323,18 +336,15 @@ def create_job(
                 worker TEXT DEFAULT 'unassigned',
                 result BYTEA DEFAULT NULL
             )
-            """
-        )
-        cursor.execute(
-            f"""
+            """)
+        cursor.execute(f"""
             CREATE TABLE {job_name}_workers (
                 worker TEXT PRIMARY KEY,
                 heartbeat TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                 num_failures INT DEFAULT 0,
                 num_done INT DEFAULT 0
             )
-            """
-        )
+            """)
         logging.info(
             f"Inserting keys for job {job_name} (this can take a while with many keys)."
         )
@@ -443,12 +453,10 @@ def iterate_results(
 ) -> Generator[tuple[str, BytesIO], None, None]:
     """Iterate over completed results in the database."""
     with get_cursor(cfg) as cursor:
-        cursor.execute(
-            f"""
+        cursor.execute(f"""
             SELECT key, result FROM {job_name} 
             WHERE status = 'done'
-            """
-        )
+            """)
         rows = cursor.fetchall()
         for key, result_bytes in rows:
             yield key, BytesIO(result_bytes)

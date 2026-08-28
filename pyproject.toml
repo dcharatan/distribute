@@ -3,13 +3,22 @@ name = "distribute"
 version = "1.0.0"
 description = "Make distributing tasks easier."
 readme = "README.md"
-requires-python =">=3.10"
+requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [
   {name = "David Charatan", email = "charatan@mit.edu"},
 ]
 urls = {repository = "https://github.com/dcharatan/distribute" }
 dependencies = ["psycopg2-binary", "backoff"]
+
+[project.optional-dependencies]
+# Needed only by dashboard.py, which is not part of the importable package.
+dashboard = ["dash", "dash-bootstrap-components"]
+
+[dependency-groups]
+# example.py and example_worker.py import beartype; dashboard.py needs the dashboard
+# extra. `uv sync` installs the dev group by default, so both come along for free.
+dev = ["beartype", "ruff", "distribute[dashboard]"]
 
 [build-system]
 requires = ["hatchling"]
@@ -19,14 +28,6 @@ build-backend = "hatchling.build"
 include = ["distribute.py"]
 
 [tool.ruff]
-# Enable Pyflakes `E` and `F` codes by default.
-select = ["E", "F", "I"]
-ignore = ["F722"] # Ignore F722 for jaxtyping compatibility.
-
-# Allow autofix for all enabled rules (when `--fix`) is provided.
-fixable = ["A", "B", "C", "D", "E", "F", "I"]
-unfixable = []
-
 # Exclude a variety of commonly ignored directories.
 exclude = [
     ".bzr",
@@ -49,17 +50,24 @@ exclude = [
     "node_modules",
     "venv",
 ]
-per-file-ignores = {}
 
 # Same as Black.
 line-length = 88
 
+[tool.ruff.lint]
+# Enable Pyflakes `E` and `F` codes by default.
+select = ["E", "F", "I"]
+ignore = ["F722"] # Ignore F722 for jaxtyping compatibility.
+
+# Allow autofix for all enabled rules (when `--fix`) is provided.
+fixable = ["A", "B", "C", "D", "E", "F", "I"]
+unfixable = []
+
+per-file-ignores = {}
+
 # Allow unused variables when underscore-prefixed.
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
-# Assume Python 3.12.
-target-version = "py312"
-
-[tool.ruff.mccabe]
+[tool.ruff.lint.mccabe]
 # Unlike Flake8, default to a complexity level of 10.
 max-complexity = 10

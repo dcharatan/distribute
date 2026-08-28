@@ -1,3 +1,4 @@
+import csv
 import logging
 import os
 import re
@@ -9,12 +10,11 @@ import time
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
-from io import BytesIO
-from typing import Generator, Protocol, runtime_checkable
+from io import BytesIO, StringIO
+from typing import Generator, Iterable, Iterator, Protocol, runtime_checkable
 
 import backoff
 import psycopg2
-from psycopg2.extras import execute_values
 
 ##########################
 # Database Configuration #
@@ -317,6 +317,50 @@ def mark_task_done(
 #################
 
 
+def iter_copy_chunks(keys: Iterable[str], chunk_size: int = 1 << 16) -> Iterator[str]:
+    """Render keys as CSV rows, yielding them in roughly chunk_size-sized blocks.
+
+    Every field is quoted so that keys containing commas, quotes or newlines survive
+    the round trip. Quoting also keeps the empty string intact, since COPY reads an
+    unquoted empty CSV field as NULL.
+    """
+    buffer = StringIO()
+    writer = csv.writer(buffer, quoting=csv.QUOTE_ALL, lineterminator="\n")
+    for key in keys:
+        writer.writerow((key,))
+        if buffer.tell() >= chunk_size:
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+    if buffer.tell():
+        yield buffer.getvalue()
+
+
+class CopyStream:
+    """Adapt an iterator of strings to the read() interface copy_expert expects.
+
+    Streaming rather than materializing the whole payload keeps memory flat no matter
+    how many keys a job has.
+    """
+
+    def __init__(self, chunks: Iterator[str]) -> None:
+        self.chunks = chunks
+        self.pending = ""
+
+    def read(self, size: int = -1) -> str:
+        if size < 0:
+            rest = self.pending + "".join(self.chunks)
+            self.pending = ""
+            return rest
+        while len(self.pending) < size:
+            chunk = next(self.chunks, None)
+            if chunk is None:
+                break
+            self.pending += chunk
+        head, self.pending = self.pending[:size], self.pending[size:]
+        return head
+
+
 def create_job(
     job_name: str,
     keys: list[str],
@@ -325,11 +369,25 @@ def create_job(
     validate(job_name)
 
     logging.info(f"Creating distributed job {job_name}")
+
+    # The table is created empty below, so the only keys that can collide are
+    # duplicates within keys itself. Dropping them here (order-preserving) lets the
+    # bulk load skip conflict handling, and guarantees the primary key added at the
+    # end will not be rejected.
+    unique_keys = tuple(dict.fromkeys(keys))
+    num_duplicates = len(keys) - len(unique_keys)
+    if num_duplicates:
+        logging.info(f"Ignoring {num_duplicates} duplicate keys.")
+
     with get_cursor(cfg) as cursor:
         logging.info(f"Creating tables for job {job_name}")
+
+        # The primary key is deliberately not declared here; it is added after the
+        # bulk load. Sorting the finished table once is much cheaper than updating a
+        # B-tree on every inserted row.
         cursor.execute(f"""
             CREATE TABLE {job_name} (
-                key TEXT PRIMARY KEY,
+                key TEXT NOT NULL,
                 status TEXT DEFAULT 'pending',
                 num_failures INT DEFAULT 0,
                 timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -345,14 +403,17 @@ def create_job(
                 num_done INT DEFAULT 0
             )
             """)
-        logging.info(
-            f"Inserting keys for job {job_name} (this can take a while with many keys)."
+
+        # COPY streams every key to the server within a single statement, replacing
+        # the one-round-trip-per-page INSERT that dominated create_job's runtime.
+        logging.info(f"Inserting {len(unique_keys)} keys for job {job_name}.")
+        cursor.copy_expert(
+            f"COPY {job_name} (key) FROM STDIN WITH (FORMAT csv)",
+            CopyStream(iter_copy_chunks(unique_keys)),
         )
-        execute_values(
-            cursor,
-            f"INSERT INTO {job_name} (key) VALUES %s ON CONFLICT (key) DO NOTHING",
-            [(key,) for key in keys],
-        )
+
+        logging.info(f"Indexing keys for job {job_name}.")
+        cursor.execute(f"ALTER TABLE {job_name} ADD PRIMARY KEY (key)")
 
 
 @runtime_checkable

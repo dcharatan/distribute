@@ -1,4 +1,0 @@
-backoff
-beartype
-black
-psycopg2-binary

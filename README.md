@@ -1,6 +1,27 @@
 # `distribute`
 
-This package makes it easy to execute parallel tasks on many workers. It is extremely simple to use. First, define a job (collection of tasks):
+This package makes it easy to execute parallel tasks on many workers.
+
+## Installation
+
+This project uses [uv](https://docs.astral.sh/uv/). All dependencies are declared in
+`pyproject.toml` and pinned in `uv.lock`.
+
+```bash
+uv sync
+```
+
+That creates `.venv` with the runtime dependencies plus the `dev` group (`beartype`,
+`ruff`) and the `dashboard` extra. Use `uv run <script>` to run anything in it, e.g.
+`uv run example.py`. For a runtime-only install (no dev tooling or dashboard), use
+`uv sync --no-default-groups`.
+
+To add or remove a dependency, use `uv add <package>` / `uv remove <package>` rather
+than editing `pyproject.toml` by hand, so that `uv.lock` stays in sync.
+
+## Usage
+
+It is extremely simple to use. First, define a job (collection of tasks):
 
 ```python
 from distribute import create_job
@@ -21,7 +42,7 @@ def task_fn(key: str, result: BytesIO) -> None:
 execute_tasks("test_job", task_fn)
 ```
 
-To see this in action, run `example.py`.
+To see this in action, run `uv run example.py`.
 
 ## Fault Tolerance
 
@@ -29,7 +50,7 @@ This package assumes that workers may be killed without notice and is designed a
 
 ## New Project Setup
 
-It is recommended to create a new PSQL database and user for each project you use this package with. To create th
+It is recommended to create a new PSQL database and user for each project you use this package with. To create them:
 
 ```bash
 sudo -u postgres createdb testing

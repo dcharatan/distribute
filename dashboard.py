@@ -1,6 +1,6 @@
 import argparse
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import dash
 import dash_bootstrap_components as dbc
@@ -25,8 +25,17 @@ ACCENT = "#007aff"
 
 DEFAULT_INTERVAL_S = 30
 
+# Jobs whose last activity (worker heartbeat or task timestamp) is older than this
+# are hidden unless the "show old jobs" toggle is on.
+MAX_AGE_DAYS = 7
+
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
+def _as_utc(ts: datetime) -> datetime:
+    """Attach UTC to a naive timestamp so comparisons never mix awareness."""
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
 def get_connection() -> psycopg2.extensions.connection:
     """Open a new psycopg2 connection."""
     return psycopg2.connect(
@@ -39,41 +48,54 @@ def get_connection() -> psycopg2.extensions.connection:
 
 
 def fetch_jobs() -> list[dict]:
-    """Fetch all job tables with their status counts and latest worker heartbeat."""
+    """Fetch all job tables with status counts, heartbeat, and last activity."""
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             # A job table is any base table in `public` that has a `status` column
             # (and isn't a `_workers` companion table). Filtering by structure
             # rather than name avoids hitting unrelated tables (migrations,
-            # config, lookups) with `SELECT status, ...`.
+            # config, lookups) with `SELECT status, ...`. `timestamp` is tracked
+            # separately because it's only used opportunistically for job age.
             cur.execute("""
-                SELECT t.table_name
+                SELECT t.table_name,
+                       bool_or(c.column_name = 'timestamp') AS has_timestamp
                 FROM information_schema.tables AS t
                 JOIN information_schema.columns AS c
                   ON c.table_schema = t.table_schema
                  AND c.table_name = t.table_name
                 WHERE t.table_schema = 'public'
                   AND t.table_type = 'BASE TABLE'
-                  AND c.column_name = 'status'
                   AND t.table_name NOT LIKE '%_workers'
+                GROUP BY t.table_name
+                HAVING bool_or(c.column_name = 'status')
                 ORDER BY t.table_name
                 """)
-            job_tables: list[str] = [row["table_name"] for row in cur.fetchall()]
+            job_tables: list[tuple[str, bool]] = [
+                (row["table_name"], bool(row["has_timestamp"]))
+                for row in cur.fetchall()
+            ]
 
             jobs: list[dict] = []
-            for table in job_tables:
+            for table, has_timestamp in job_tables:
                 # Defense in depth: if a table is mid-migration or malformed,
-                # skip it rather than aborting the whole fetch.
+                # skip it rather than aborting the whole fetch. MAX(timestamp)
+                # rides along on the scan the counts already need.
+                latest_task: datetime | None = None
                 try:
                     cur.execute(f"""
                         SELECT status, COUNT(*) AS cnt
+                             {", MAX(timestamp) AS latest" if has_timestamp else ""}
                         FROM {psycopg2.extensions.quote_ident(table, cur)}
                         GROUP BY status
                         """)
-                    counts: dict[str, int] = {
-                        r["status"]: int(r["cnt"]) for r in cur.fetchall()
-                    }
+                    counts: dict[str, int] = {}
+                    for r in cur.fetchall():
+                        counts[r["status"]] = int(r["cnt"])
+                        if r.get("latest") is not None and (
+                            latest_task is None or r["latest"] > latest_task
+                        ):
+                            latest_task = r["latest"]
                 except psycopg2.errors.UndefinedColumn:
                     conn.rollback()
                     continue
@@ -93,6 +115,12 @@ def fetch_jobs() -> list[dict]:
                 except psycopg2.errors.UndefinedTable:
                     conn.rollback()
 
+                # A job's age is its most recent sign of life. Jobs with neither a
+                # heartbeat nor a timestamp column have unknown age (None) and are
+                # never hidden by the age filter.
+                activity = [
+                    _as_utc(ts) for ts in (latest_heartbeat, latest_task) if ts
+                ]
                 jobs.append(
                     {
                         "name": table,
@@ -100,11 +128,13 @@ def fetch_jobs() -> list[dict]:
                         "total": sum(counts.values()),
                         "latest_heartbeat": latest_heartbeat,
                         "num_workers": num_workers,
+                        "last_activity": max(activity) if activity else None,
                     }
                 )
 
+            # Most recently active first; unknown-age jobs sort to the bottom.
             jobs.sort(
-                key=lambda j: j["latest_heartbeat"]
+                key=lambda j: j["last_activity"]
                 or datetime.min.replace(tzinfo=timezone.utc),
                 reverse=True,
             )
@@ -118,10 +148,7 @@ def format_heartbeat(ts: datetime | None) -> str:
     """Format a heartbeat timestamp as a human-readable relative string."""
     if ts is None:
         return "no heartbeat"
-    now = datetime.now(tz=timezone.utc)
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    delta = now - ts
+    delta = datetime.now(tz=timezone.utc) - _as_utc(ts)
     s = int(delta.total_seconds())
     if s < 60:
         return f"{s}s ago"
@@ -354,28 +381,62 @@ def create_app() -> dash.Dash:
                             "gap": "12px",
                         },
                     ),
-                    # Search bar
+                    # Search bar + age filter
                     html.Div(
-                        dcc.Input(
-                            id="search-input",
-                            type="text",
-                            placeholder="Search jobs…",
-                            debounce=False,
-                            style={
-                                "width": "100%",
-                                "background": "#ffffff",
-                                "border": f"1px solid {BORDER}",
-                                "borderRadius": "8px",
-                                "color": TEXT_PRIMARY,
-                                "padding": "9px 14px",
-                                "fontSize": "14px",
-                                "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
-                                "outline": "none",
-                                "boxSizing": "border-box",
-                                "boxShadow": "0 1px 2px rgba(0,0,0,0.04)",
-                            },
-                        ),
-                        style={"padding": "14px 28px"},
+                        [
+                            dcc.Input(
+                                id="search-input",
+                                type="text",
+                                placeholder="Search jobs…",
+                                debounce=False,
+                                style={
+                                    "flex": "1",
+                                    "minWidth": "200px",
+                                    "background": "#ffffff",
+                                    "border": f"1px solid {BORDER}",
+                                    "borderRadius": "8px",
+                                    "color": TEXT_PRIMARY,
+                                    "padding": "9px 14px",
+                                    "fontSize": "14px",
+                                    "fontFamily": "-apple-system, BlinkMacSystemFont, 'Inter', sans-serif",
+                                    "outline": "none",
+                                    "boxSizing": "border-box",
+                                    "boxShadow": "0 1px 2px rgba(0,0,0,0.04)",
+                                },
+                            ),
+                            dcc.Checklist(
+                                id="show-old-toggle",
+                                options=[
+                                    {
+                                        "label": f" Show jobs older than {MAX_AGE_DAYS} days",
+                                        "value": "show_old",
+                                    }
+                                ],
+                                value=[],
+                                style={
+                                    "fontSize": "13px",
+                                    "color": TEXT_MUTED,
+                                    "whiteSpace": "nowrap",
+                                },
+                                inputStyle={
+                                    "marginRight": "2px",
+                                    "accentColor": ACCENT,
+                                    "cursor": "pointer",
+                                },
+                                labelStyle={
+                                    "display": "flex",
+                                    "alignItems": "center",
+                                    "cursor": "pointer",
+                                },
+                            ),
+                        ],
+                        style={
+                            "display": "flex",
+                            "alignItems": "center",
+                            "gap": "16px",
+                            "padding": "14px 28px",
+                            "flexWrap": "wrap",
+                        },
                     ),
                     # Divider
                     html.Div(
@@ -418,10 +479,12 @@ def create_app() -> dash.Dash:
         Output("last-updated", "children"),
         Input("refresh-btn", "n_clicks"),
         Input("search-input", "value"),
+        Input("show-old-toggle", "value"),
     )
     def update_jobs(
         _n_clicks: int,
         search: str | None,
+        show_old: list[str] | None,
     ) -> tuple[list, str]:
         """Fetch jobs from the database and render job cards."""
         try:
@@ -437,11 +500,38 @@ def create_app() -> dash.Dash:
                 "failed to fetch",
             )
 
+        num_fetched = len(jobs)
+        if "show_old" not in (show_old or []):
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(days=MAX_AGE_DAYS)
+            jobs = [
+                j
+                for j in jobs
+                if j["last_activity"] is None or j["last_activity"] >= cutoff
+            ]
+        num_hidden = num_fetched - len(jobs)
+
         query = (search or "").strip().lower()
         if query:
             jobs = [j for j in jobs if query in j["name"].lower()]
 
         now_str = datetime.now().strftime("Updated %H:%M:%S")
+
+        hidden_note = (
+            [
+                html.Div(
+                    f"{num_hidden} job{'' if num_hidden == 1 else 's'} inactive for "
+                    f"over {MAX_AGE_DAYS} days hidden.",
+                    style={
+                        "color": TEXT_MUTED,
+                        "fontSize": "12px",
+                        "textAlign": "center",
+                        "padding": "12px 0 0",
+                    },
+                )
+            ]
+            if num_hidden
+            else []
+        )
 
         if not jobs:
             return (
@@ -450,16 +540,17 @@ def create_app() -> dash.Dash:
                         "No jobs found.",
                         style={
                             "color": TEXT_MUTED,
-                            "padding": "40px 0",
+                            "padding": "40px 0 0",
                             "textAlign": "center",
                             "fontSize": "13px",
                         },
-                    )
+                    ),
+                    *hidden_note,
                 ],
                 now_str,
             )
 
-        return [make_job_card(j) for j in jobs], now_str
+        return [make_job_card(j) for j in jobs] + hidden_note, now_str
 
     return app
 
